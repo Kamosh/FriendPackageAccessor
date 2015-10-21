@@ -23,8 +23,11 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVisitor;
 import javax.lang.model.util.SimpleElementVisitor6;
+import javax.lang.model.util.TypeKindVisitor6;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 
@@ -32,6 +35,13 @@ import javax.tools.JavaFileObject;
 public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
 
     private final static String NEW_LINE = System.getProperty("line.separator"); // NORES
+
+    private enum TypeOfAccessedMethod {
+
+        STATIC,
+        CONSTRUCTOR,
+        INSTANCE
+    }
 
     private Filer filer;
     private Messager messager;
@@ -44,7 +54,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
-        
+
         //FqAccessorName->methodsToAccess
         Map<String, Collection<Element>> accessorsEntries
                 = collectAccessorsAndMethods(roundEnv.getElementsAnnotatedWith(FriendlyAccessor.class));
@@ -57,17 +67,18 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             final ClassDescription accessorFileDescription = parseClassName(accessorEntry.getKey());
 
             final StringBuilder accessorImplFileText = new StringBuilder();
-            final ClassDescription accessedFileDescription = deriveAccessedFileDescription(accessorEntry);
+            ClassDescription accessedFileDescription = deriveAccessedFileDescription(accessorEntry);
             final ClassDescription accessorImplFileDescription = new ClassDescription(accessedFileDescription.packageName, accessorFileDescription.className + "Impl");
             accessorImplFileText.append(generateAccessorImplSignature(accessedFileDescription, accessorImplFileDescription, accessorFileDescription));
 
             final StringBuilder accessorFileText = new StringBuilder();
             accessorFileText.append(generateAccessorSignature(accessorEntry.getKey(), accessorImplFileDescription.fqName));
 
-            for (Element methodToAccess : accessorEntry.getValue()) {
+            for (final Element methodToAccess : accessorEntry.getValue()) {
                 final TypeMirror enclosingType = findEnclosingType(methodToAccess);
-                
-                String methodName = methodToAccess.getSimpleName().toString();
+                final TypeOfAccessedMethod typeOfAccessedMethod = findTypeOfAccessedMethod(methodToAccess);
+                final String methodName = methodToAccess.getSimpleName().toString();
+                final String accessedTypeName = findTypeNameWithTrimmedPackage(enclosingType);
 
                 SimpleElementVisitor6 visitor = new SimpleElementVisitor6() {
                     @Override
@@ -75,20 +86,39 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
                         StringBuilder commonCode = new StringBuilder();
                         accessorFileText.append("protected abstract ");
                         accessorImplFileText.append("protected ");
-                        commonCode.append(e.getReturnType().toString());
+                        String accessedMethodName;
+                        if (typeOfAccessedMethod == TypeOfAccessedMethod.CONSTRUCTOR) {
+                            commonCode.append(enclosingType.toString());
+                            accessedMethodName = accessedTypeName.replaceAll("\\.", "_");
+                        } else {
+                            commonCode.append(e.getReturnType().toString());
+                            accessedMethodName = e.getSimpleName().toString();
+                        }
                         commonCode.append(" ");
-                        final String accessedMethodName = e.getSimpleName().toString();
+
                         commonCode.append(accessedMethodName);
                         commonCode.append("(");
                         String comma = "";
                         String accessedClassParamName = null;
-                        if (enclosingType != null) {
-                            commonCode.append(enclosingType.toString());
-                            commonCode.append(" ");
-                            accessedClassParamName = firstLowerCase(accessedFileDescription.className);
-                            commonCode.append(accessedClassParamName);
-                            comma = ", ";
+                        
+                        switch (typeOfAccessedMethod) {
+                            case CONSTRUCTOR:
+                            case STATIC:
+                                commonCode.append("Class<");
+                                break;
                         }
+                        commonCode.append(enclosingType.toString());
+                        switch (typeOfAccessedMethod) {
+                            case CONSTRUCTOR:
+                            case STATIC:
+                                commonCode.append(">");
+                                break;
+                        }
+                        commonCode.append(" ");
+                        accessedClassParamName = firstLowerCase(accessedTypeName.replaceAll("\\.", ""));
+                        commonCode.append(accessedClassParamName);
+                        comma = ", ";
+                        
                         for (VariableElement variableElement : e.getParameters()) {
                             commonCode.append(comma);
                             TypeMirror paramType = variableElement.asType();
@@ -108,11 +138,29 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
                         accessorImplFileText.append(NEW_LINE);
                         accessorImplFileText.append(NEW_LINE);
 
-                        if (!"void".equals(e.getReturnType().toString())) {
-                            accessorImplFileText.append("return ");
+                        switch (typeOfAccessedMethod) {
+                            case CONSTRUCTOR:
+                                accessorImplFileText.append("return new ");
+                                accessorImplFileText.append(enclosingType.toString());
+                                break;
+                            case STATIC:
+                                if (!"void".equals(e.getReturnType().toString())) {
+                                    accessorImplFileText.append("return ");
+                                }
+                                accessorImplFileText.append(enclosingType.toString());
+                                accessorImplFileText.append(".");
+                                accessorImplFileText.append(accessedMethodName);
+                                break;
+                            case INSTANCE:
+                                if (!"void".equals(e.getReturnType().toString())) {
+                                    accessorImplFileText.append("return ");
+                                }
+                                accessorImplFileText.append(accessedClassParamName);
+                                accessorImplFileText.append(".");
+                                accessorImplFileText.append(accessedMethodName);
+                                break;
                         }
-                        accessorImplFileText.append(accessedClassParamName);
-                        accessorImplFileText.append("." + accessedMethodName);
+
                         accessorImplFileText.append("(");
                         comma = "";
                         for (VariableElement variableElement : e.getParameters()) {
@@ -124,7 +172,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
                         accessorImplFileText.append(NEW_LINE);
                         accessorImplFileText.append("}");
                         accessorImplFileText.append(NEW_LINE);
-                        
+
                         return super.visitExecutable(e, p);
                     }
 
@@ -134,10 +182,9 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             accessorFileText.append("}");
             accessorImplFileText.append("}");
             
-            // TODO Think about originating elements
-            createFile(accessorEntry.getKey(), accessorFileText, 
+            createFile(accessorEntry.getKey(), accessorFileText,
                     accessorEntry.getValue().toArray(new Element[0]));
-            createFile(accessorImplFileDescription.fqName, accessorImplFileText, 
+            createFile(accessorImplFileDescription.fqName, accessorImplFileText,
                     accessorEntry.getValue().toArray(new Element[0]));
         }
         return true;
@@ -268,8 +315,8 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             + "}\n";
 
     private StringBuilder generateAccessorImplSignature(
-            ClassDescription accessedFileDescription, 
-            ClassDescription accessorImplFileDescription, 
+            ClassDescription accessedFileDescription,
+            ClassDescription accessorImplFileDescription,
             ClassDescription accessorFileDescription) {
         // Get package of the accessed type        
         StringBuilder sb = new StringBuilder();
@@ -326,16 +373,16 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             // The annotated method must not have private access modifier.
             for (Element method : accessorMethods.getValue()) {
                 PackageElement methodEnclosingPackage = fingEnclosingPackage(method);
-                if(enclosingPackage == null) {
+                if (enclosingPackage == null) {
                     enclosingPackage = methodEnclosingPackage;
                     firstMethodDefiningPackage = method;
-                } else if(!enclosingPackage.getQualifiedName().equals(methodEnclosingPackage.getQualifiedName())) {
+                } else if (!enclosingPackage.getQualifiedName().equals(methodEnclosingPackage.getQualifiedName())) {
                     print(Diagnostic.Kind.ERROR,
-                            "Accessor " + accessorMethods.getKey() + " cannot be used to access methods from different packages. " +
-                                    getFqMethodName(firstMethodDefiningPackage) + ", " + getFqMethodName(method));  
+                            "Accessor " + accessorMethods.getKey() + " cannot be used to access methods from different packages. "
+                            + getFqMethodName(firstMethodDefiningPackage) + ", " + getFqMethodName(method));
                     return false;
                 }
-                
+
                 if (method.getModifiers().contains(Modifier.PRIVATE)) {
                     print(Diagnostic.Kind.ERROR,
                             "Annotation FriendlyAccessor cannot be used for private method " + getFqMethodName(method));
@@ -354,7 +401,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
         Element enclosingElement = method;
         while (enclosingElement != null) {
             if (enclosingElement.getKind() == ElementKind.PACKAGE) {
-                return (PackageElement)enclosingElement;
+                return (PackageElement) enclosingElement;
             }
             enclosingElement = enclosingElement.getEnclosingElement();
         }
@@ -392,6 +439,22 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
         // Class name
         className = fqClassName.substring(classNameStartIndex);
         return new ClassDescription(packageName, className);
+    }
+
+    private TypeOfAccessedMethod findTypeOfAccessedMethod(Element methodToAccess) {
+        if (methodToAccess.getKind() == ElementKind.CONSTRUCTOR) {
+            return TypeOfAccessedMethod.CONSTRUCTOR;
+        }
+        if (methodToAccess.getModifiers().contains(Modifier.STATIC)) {
+            return TypeOfAccessedMethod.STATIC;
+        }
+        return TypeOfAccessedMethod.INSTANCE;
+    }
+
+    private String findTypeNameWithTrimmedPackage(TypeMirror enclosingType) {
+        // TODO Do not use only last name, the type can be an innertype!!!
+        String fqName = enclosingType.toString();
+        return fqName.substring(fqName.lastIndexOf('.') + 1);
     }
 }
 
