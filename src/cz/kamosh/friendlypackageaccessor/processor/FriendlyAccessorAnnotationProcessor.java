@@ -50,7 +50,8 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             // TODO Check that there is not already existing ...Impl file
             String fqEnclosingType = enclosingType.toString();
             final ClassDescription accessedFileDescription = parseClassName(fqEnclosingType);
-            accessorImplFileText.append(generateAccessorImplSignature(accessedFileDescription, accessorFileDescription));
+            final ClassDescription accessorImplFileDescription = new ClassDescription(accessedFileDescription.packageName, accessorFileDescription.className + "Impl");
+            accessorImplFileText.append(generateAccessorImplSignature(accessedFileDescription, accessorImplFileDescription, accessorFileDescription));
 
             final StringBuilder accessorFileText = new StringBuilder();
             accessorFileText.append(generateAccessorSignature(accessorEntry.getKey()));
@@ -63,10 +64,11 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
                     @Override
                     public Object visitExecutable(ExecutableElement e, Object p) {
                         StringBuilder commonCode = new StringBuilder();
-                        accessorFileText.append("abstract ");
+                        accessorFileText.append("protected abstract ");
+                        accessorImplFileText.append("protected ");
                         commonCode.append(e.getReturnType().toString());
                         commonCode.append(" ");
-                        final String accessedMethodName = e.getSimpleName().toString();
+                        final String accessedMethodName = e.getSimpleName().toString();                        
                         commonCode.append(accessedMethodName);
                         commonCode.append("(");
                         String comma = "";
@@ -124,8 +126,8 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             accessorFileText.append("}");
             // TODO Think about originating elements
             createFile(processingEnv.getFiler(), accessorEntry.getKey(), accessorFileText, null);
-            String fqAccessorImpl = accessedFileDescription.packageName != null ? accessedFileDescription.packageName + "." : "";
-            fqAccessorImpl += accessedFileDescription.className + "Impl";
+            String fqAccessorImpl = accessorImplFileDescription.packageName != null ? accessorImplFileDescription.packageName + "." : "";
+            fqAccessorImpl += accessorImplFileDescription.className;
             accessorImplFileText.append("}");
             createFile(processingEnv.getFiler(), fqAccessorImpl, accessorImplFileText, null);
         }
@@ -208,7 +210,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
 
     private final static String BASIC_ACCESSOR_IMPL_CODE
             = "    static {\n"
-            + "      XXXAccessor.setDefault(new XXXAccessorImpl());\n"
+            + "      XXXAccessor.setDefault(new XXXImpl());\n"
             + "    }";
 
     private final static String BASIC_ACCESSOR_CODE
@@ -231,17 +233,17 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             + "    protected XXX() {\n"
             + "    }\n";
 
-    private StringBuilder generateAccessorImplSignature(ClassDescription accessedFileDescription, ClassDescription accessorFileDescription) {
+    private StringBuilder generateAccessorImplSignature(ClassDescription accessedFileDescription, ClassDescription accessorImplFileDescription, ClassDescription accessorFileDescription) {
         // Get package of the accessed type        
         StringBuilder sb = new StringBuilder();
         if (accessedFileDescription.packageName != null) {
             sb.append("package ");
-            sb.append(accessedFileDescription.packageName);
+            sb.append(accessorImplFileDescription.packageName);
             sb.append(";");
             sb.append(NEW_LINE);
         }
         // TODO Check that use has not already created file with this name
-        final String accessorImplClassName = accessedFileDescription.className + "Impl";
+        final String accessorImplClassName = accessorImplFileDescription.className;
         sb.append("class ");
         sb.append(accessorImplClassName);
         sb.append(" extends ");
@@ -256,7 +258,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
         sb.append(NEW_LINE);
         
         String replacedAccessorName = BASIC_ACCESSOR_IMPL_CODE.replaceAll("XXXAccessor", accessorFileDescription.fqName);
-        String replacedAccessorImplName = replacedAccessorName.replaceAll("XXXAccessorImpl", accessorImplClassName);
+        String replacedAccessorImplName = replacedAccessorName.replaceAll("XXXImpl", accessorImplClassName);
         sb.append(replacedAccessorImplName);
         sb.append(NEW_LINE);
 
