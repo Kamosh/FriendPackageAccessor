@@ -54,7 +54,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             accessorImplFileText.append(generateAccessorImplSignature(accessedFileDescription, accessorImplFileDescription, accessorFileDescription));
 
             final StringBuilder accessorFileText = new StringBuilder();
-            accessorFileText.append(generateAccessorSignature(accessorEntry.getKey()));
+            accessorFileText.append(generateAccessorSignature(accessorEntry.getKey(), accessorImplFileDescription.fqName));
 
             for (Element methodToAccess : accessorEntry.getValue()) {
 
@@ -68,7 +68,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
                         accessorImplFileText.append("protected ");
                         commonCode.append(e.getReturnType().toString());
                         commonCode.append(" ");
-                        final String accessedMethodName = e.getSimpleName().toString();                        
+                        final String accessedMethodName = e.getSimpleName().toString();
                         commonCode.append(accessedMethodName);
                         commonCode.append("(");
                         String comma = "";
@@ -169,7 +169,7 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
         return Character.toLowerCase(string.charAt(0)) + (string.length() > 1 ? string.substring(1) : "");
     }
 
-    private StringBuilder generateAccessorSignature(String fqAccessorName) {
+    private StringBuilder generateAccessorSignature(String fqAccessorName, String fqAccessorImplName) {
         StringBuilder res = new StringBuilder();
 
         final int classNameStartIndex = fqAccessorName.lastIndexOf('.') + 1;
@@ -185,8 +185,11 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
         res.append(fqAccessorName.substring(classNameStartIndex));
         res.append(" {");
         res.append(NEW_LINE);
-        final String basicAccessorCode
-                = BASIC_ACCESSOR_CODE.replaceAll("XXX", fqAccessorName.substring(fqAccessorName.lastIndexOf('.') + 1));
+        String basicAccessorCode
+                = BASIC_ACCESSOR_CODE.replaceAll("XXXAccessor", fqAccessorName.substring(fqAccessorName.lastIndexOf('.') + 1));
+        // TODO specify XXXImpl replace value
+        basicAccessorCode =
+                basicAccessorCode.replaceAll("XXXImpl", fqAccessorImplName);
         res.append(basicAccessorCode);
 
         return res;
@@ -214,8 +217,8 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             + "    }";
 
     private final static String BASIC_ACCESSOR_CODE
-            = "    private static volatile XXX DEFAULT;\n"
-            + "    public static APIAccessor getDefault() {\n"
+            = "    private static volatile XXXAccessor DEFAULT;\n"
+            + "    public static XXXAccessor getDefault() {\n"
             + "        APIAccessor a = DEFAULT;\n"
             + "        if (a == null) {\n"
             + "            throw new IllegalStateException(\"Something is wrong: \" + a);\n"
@@ -223,15 +226,29 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
             + "        return a;\n"
             + "    }\n"
             + " \n"
-            + "    public static void setDefault(XXX accessor) {\n"
+            + "    public static void setDefault(XXXAccessor accessor) {\n"
             + "        if (DEFAULT != null) {\n"
             + "            throw new IllegalStateException();\n"
             + "        }\n"
             + "        DEFAULT = accessor;\n"
             + "    }\n"
             + " \n"
-            + "    protected XXX() {\n"
-            + "    }\n";
+            + "    protected XXXAccessor() {\n"
+            + "    }\n"
+            + "  \n"
+            + "private static final Class<?> INIT_API_CLASS = loadClass(\n"
+            + "    \"XXXImpl\"\n"
+            + ");\n"
+            + "\n"
+            + "private static Class<?> loadClass(String name) {\n"
+            + "  try {\n"
+            + "    return Class.forName(\n"
+            + "   name, true, XXXAccessor.class.getClassLoader()\n"
+            + "  );\n"
+            + "  } catch (Exception ex) {\n"
+            + "    throw new RuntimeException(ex);\n"
+            + "  }\n"
+            + "}";
 
     private StringBuilder generateAccessorImplSignature(ClassDescription accessedFileDescription, ClassDescription accessorImplFileDescription, ClassDescription accessorFileDescription) {
         // Get package of the accessed type        
@@ -249,14 +266,13 @@ public class FriendlyAccessorAnnotationProcessor extends AbstractProcessor {
         sb.append(" extends ");
         if (accessorFileDescription.packageName != null) {
             sb.append(accessorFileDescription.packageName);
-            sb.append(".");            
+            sb.append(".");
         }
-        sb.append(accessorFileDescription.className);                
-        
+        sb.append(accessorFileDescription.className);
 
-        sb.append(" {");        
+        sb.append(" {");
         sb.append(NEW_LINE);
-        
+
         String replacedAccessorName = BASIC_ACCESSOR_IMPL_CODE.replaceAll("XXXAccessor", accessorFileDescription.fqName);
         String replacedAccessorImplName = replacedAccessorName.replaceAll("XXXImpl", accessorImplClassName);
         sb.append(replacedAccessorImplName);
